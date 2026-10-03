@@ -72,3 +72,13 @@ input.invalid { border-color: #b44b61; }
 	.footer-details { align-items: start; flex-direction: column; gap: 8px; }
 	.footer-copyright { justify-self: start; }
 }
+
+.link-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

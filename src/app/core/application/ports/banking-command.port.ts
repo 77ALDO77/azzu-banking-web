@@ -4,8 +4,7 @@ import { Observable } from 'rxjs';
 export interface TransferDraft {
   idempotencyKey: string;
   sourceAccountId: string;
-  recipientDocument: string;
-  recipientName: string;
+  destinationAccountNumber: string;
   amount: number;
   description: string;
 }
@@ -19,7 +18,7 @@ export interface DigitalKeyChange { currentKey: string; newKey: string; }
 export interface NotificationPreferencesUpdate { transfers: boolean; cardPurchases: boolean; security: boolean; marketing: boolean; channel: 'email' | 'push' | 'both'; }
 export interface CardControlUpdate { cardId: string; purchaseLimit: number; onlinePaymentsEnabled: boolean; }
 export interface ProcedureRequest { type: 'bank-certificate' | 'data-update' | 'claim'; detail: string; }
-export interface ApiOperation { id: string; status: 'accepted' | 'completed'; message: string; }
+export interface ApiOperation { id: string; status: string; message: string; resultingBalance?: number | null; }
 
 /**
  * Contrato del portal. La implementación productiva debe invocar /api mediante HTTPS;

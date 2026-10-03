@@ -1,12 +1,17 @@
 import { InjectionToken } from '@angular/core';
 import { Observable } from 'rxjs';
 
-export type LoginDocumentType = 'DNI' | 'CE' | 'PASSPORT';
-
+// Login propio de banca.azzu.tech contra Keycloak (vía BFF e Identity): DNI + contraseña y luego
+// el código enviado al correo verificado en el onboarding. Nunca se redirige a una página del IdP.
 export interface LoginCredentials {
-  documentType: LoginDocumentType;
   documentNumber: string;
-  digitalKey: string;
+  password: string;
+}
+
+export interface LoginChallenge {
+  loginId: string;
+  maskedEmail: string;
+  expiresInSeconds: number;
 }
 
 export interface AuthenticatedSession {
@@ -18,9 +23,9 @@ export interface AuthenticatedSession {
 }
 
 export interface AuthPort {
-  beginLogin(returnUrl: string): void;
+  startLogin(credentials: LoginCredentials): Observable<LoginChallenge>;
+  verifyLogin(loginId: string, code: string): Observable<AuthenticatedSession>;
   beginStepUp(returnUrl: string): void;
-  login(credentials: LoginCredentials): Observable<AuthenticatedSession>;
   getSession(): Observable<AuthenticatedSession | null>;
   logout(): Observable<void>;
 }

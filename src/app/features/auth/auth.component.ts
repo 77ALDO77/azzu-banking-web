@@ -1,15 +1,17 @@
-import { Component, computed, HostListener, inject, signal } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
+import { Component, computed, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { LucideArrowRight, LucideChevronRight, LucideDelete } from '@lucide/angular';
+import { LucideArrowRight, LucideChevronRight } from '@lucide/angular';
 import { finalize, take } from 'rxjs';
-import { LoginDocumentType } from '../../core/application/ports/auth.port';
+import { LoginChallenge } from '../../core/application/ports/auth.port';
 import { SessionService } from '../../core/auth/session.service';
-import { environment } from '../../../environments/environment';
 
+// Acceso con identidad AZZU (Keycloak) en el formulario propio: DNI + contraseña y luego el código
+// de 6 dígitos enviado al correo. Las credenciales viajan al BFF del mismo origen, nunca a otra página.
 @Component({
   selector: 'app-auth',
-  imports: [ReactiveFormsModule, RouterLink, LucideArrowRight, LucideChevronRight, LucideDelete],
+  imports: [ReactiveFormsModule, RouterLink, LucideArrowRight, LucideChevronRight],
   templateUrl: './auth.component.html',
   styleUrl: './auth.component.scss',
 })
@@ -19,81 +21,41 @@ export class AuthComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly session = inject(SessionService);
 
-  readonly federatedLogin = environment.authStrategy === 'bff-oidc';
-  readonly documentType = signal<LoginDocumentType>('DNI');
-  readonly documentTypeName = computed(() => ({ DNI: 'DNI', CE: 'carnet de extranjería', PASSPORT: 'pasaporte' })[this.documentType()]);
-  readonly documentMinLength = computed(() => this.documentType() === 'PASSPORT' ? 6 : this.documentType() === 'DNI' ? 8 : 9);
-  readonly documentMaxLength = computed(() => this.documentType() === 'PASSPORT' ? 12 : this.documentType() === 'DNI' ? 8 : 9);
-  readonly documentInputMode = computed(() => this.documentType() === 'PASSPORT' ? 'text' : 'numeric');
-  readonly documentPlaceholder = computed(() => {
-    if (this.documentType() === 'DNI') return 'Ingresa tus 8 dígitos';
-    if (this.documentType() === 'CE') return 'Ingresa tus 9 dígitos';
-    return 'Entre 6 y 12 letras o números';
-  });
-  readonly sessionMessage = this.route.snapshot.queryParamMap.get('reason') === 'expired'
-    ? 'Tu sesión finalizó por seguridad. Ingresa nuevamente para continuar.'
-    : '';
-  readonly keypadOpen = signal(false);
-  readonly keypadDigits = signal(this.shuffleDigits());
+  readonly sessionMessage = (() => {
+    const reason = this.route.snapshot.queryParamMap.get('reason');
+    if (reason === 'expired') return 'Tu sesión finalizó por seguridad. Ingresa nuevamente para continuar.';
+    if (reason === 'reauth') return 'Por seguridad, confirma tu identidad para continuar con la operación.';
+    return '';
+  })();
+  private readonly returnUrl = this.session.safeReturnUrl(this.route.snapshot.queryParamMap.get('returnUrl'));
+  readonly challenge = signal<LoginChallenge | null>(null);
   readonly submitted = signal(false);
   readonly isSubmitting = signal(false);
+  readonly showPassword = signal(false);
   readonly loginError = signal('');
   readonly loginForm = this.formBuilder.nonNullable.group({
     documentNumber: ['', [Validators.required, Validators.pattern(/^\d{8}$/)]],
-    digitalKey: ['', [Validators.required, Validators.pattern(/^\d{6}$/)]],
+    password: ['', [Validators.required, Validators.maxLength(256)]],
+  });
+  readonly codeForm = this.formBuilder.nonNullable.group({
+    code: ['', [Validators.required, Validators.pattern(/^\d{6}$/)]],
   });
   readonly documentNumberInvalid = computed(() => this.loginForm.controls.documentNumber.invalid && (this.loginForm.controls.documentNumber.touched || this.submitted()));
-  readonly digitalKeyInvalid = computed(() => this.loginForm.controls.digitalKey.invalid && (this.loginForm.controls.digitalKey.touched || this.submitted()));
-
-  changeDocumentType(event: Event): void {
-    const selected = (event.target as HTMLSelectElement).value as LoginDocumentType;
-    if (selected !== 'DNI' && selected !== 'CE' && selected !== 'PASSPORT') return;
-    this.documentType.set(selected);
-    const documentControl = this.loginForm.controls.documentNumber;
-    documentControl.reset('');
-    documentControl.setValidators([Validators.required, Validators.pattern(this.documentPattern(selected))]);
-    documentControl.updateValueAndValidity();
-  }
-
-  openKeypad(): void {
-    if (this.keypadOpen()) return;
-    this.keypadDigits.set(this.shuffleDigits());
-    this.keypadOpen.set(true);
-  }
-
-  @HostListener('document:pointerdown', ['$event'])
-  closeKeypadOutside(event: PointerEvent): void {
-    if (!this.keypadOpen()) return;
-    const target = event.target as HTMLElement | null;
-    if (target?.closest('.password-field, .secure-keypad')) return;
-    this.keypadOpen.set(false);
-  }
-
-  enterDigitalKeyDigit(digit: string): void {
-    const control = this.loginForm.controls.digitalKey;
-    if (control.value.length < 6) control.setValue(`${control.value}${digit}`);
-  }
-
-  deleteDigitalKeyDigit(): void {
-    const control = this.loginForm.controls.digitalKey;
-    control.setValue(control.value.slice(0, -1));
-  }
+  readonly passwordInvalid = computed(() => this.loginForm.controls.password.invalid && (this.loginForm.controls.password.touched || this.submitted()));
+  readonly codeInvalid = computed(() => this.codeForm.controls.code.invalid && (this.codeForm.controls.code.touched || this.submitted()));
 
   sanitizeDocumentNumber(event: Event): void {
     const input = event.target as HTMLInputElement;
-    const maxLength = this.documentMaxLength();
-    const documentNumber = this.documentType() === 'PASSPORT'
-      ? input.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, maxLength)
-      : input.value.replace(/\D/g, '').slice(0, maxLength);
-    input.value = documentNumber;
-    this.loginForm.controls.documentNumber.setValue(documentNumber);
+    const value = input.value.replace(/\D/g, '').slice(0, 8);
+    input.value = value;
+    this.loginForm.controls.documentNumber.setValue(value);
   }
 
-  keepOnlyDigits(event: Event): void {
+  sanitizeCode(event: Event): void {
     const input = event.target as HTMLInputElement;
-    const digits = input.value.replace(/\D/g, '').slice(0, 6);
-    input.value = digits;
-    this.loginForm.controls.digitalKey.setValue(digits);
+    const value = input.value.replace(/\D/g, '').slice(0, 6);
+    input.value = value;
+    this.codeForm.controls.code.setValue(value);
   }
 
   submit(): void {
@@ -104,46 +66,65 @@ export class AuthComponent {
     }
     this.isSubmitting.set(true);
     this.loginError.set('');
-    const { documentNumber, digitalKey } = this.loginForm.getRawValue();
-    this.session.authenticate({ documentType: this.documentType(), documentNumber, digitalKey }).pipe(
+    const { documentNumber, password } = this.loginForm.getRawValue();
+    this.session.startLogin({ documentNumber, password }).pipe(
       take(1),
       finalize(() => this.isSubmitting.set(false)),
     ).subscribe({
-      next: () => void this.router.navigateByUrl('/portal/inicio'),
-      error: () => {
-        this.loginForm.controls.digitalKey.setValue('');
-        this.keypadDigits.set(this.shuffleDigits());
-        this.loginError.set('No pudimos validar tus datos. Revisa tu documento y clave digital.');
+      next: (challenge) => {
+        this.loginForm.controls.password.setValue('');
+        this.submitted.set(false);
+        this.challenge.set(challenge);
+      },
+      error: (error: unknown) => {
+        this.loginForm.controls.password.setValue('');
+        this.loginError.set(this.message(error, 'DNI o contraseña incorrectos.'));
       },
     });
   }
 
-  startSecureLogin(): void {
-    if (this.isSubmitting()) return;
-    this.isSubmitting.set(true);
-    this.session.beginSignIn('/portal/inicio');
-  }
-
-  private shuffleDigits(): string[] {
-    const digits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
-    for (let index = digits.length - 1; index > 0; index -= 1) {
-      const target = this.secureRandomIndex(index + 1);
-      [digits[index], digits[target]] = [digits[target], digits[index]];
+  verify(): void {
+    const challenge = this.challenge();
+    this.submitted.set(true);
+    if (!challenge || this.codeForm.invalid || this.isSubmitting()) {
+      this.codeForm.markAllAsTouched();
+      return;
     }
-    return digits;
+    this.isSubmitting.set(true);
+    this.loginError.set('');
+    this.session.verifyLogin(challenge.loginId, this.codeForm.controls.code.value).pipe(
+      take(1),
+      finalize(() => this.isSubmitting.set(false)),
+    ).subscribe({
+      next: () => void this.router.navigateByUrl(this.returnUrl),
+      error: (error: unknown) => {
+        this.codeForm.controls.code.setValue('');
+        const code = this.problemCode(error);
+        if (code === 'LOGIN_EXPIRED') this.restart();
+        this.loginError.set(this.message(error, 'El código no es válido.'));
+      },
+    });
   }
 
-  private documentPattern(documentType: LoginDocumentType): RegExp {
-    return documentType === 'DNI' ? /^\d{8}$/ : documentType === 'CE' ? /^\d{9}$/ : /^[A-Z0-9]{6,12}$/;
+  restart(): void {
+    this.challenge.set(null);
+    this.codeForm.reset();
+    this.submitted.set(false);
   }
 
-  private secureRandomIndex(limit: number): number {
-    const range = 0x1_0000_0000;
-    const cutoff = Math.floor(range / limit) * limit;
-    const randomValue = new Uint32Array(1);
-    do {
-      crypto.getRandomValues(randomValue);
-    } while (randomValue[0] >= cutoff);
-    return randomValue[0] % limit;
+  private problemCode(error: unknown): string {
+    return error instanceof HttpErrorResponse && typeof error.error?.code === 'string' ? error.error.code : '';
+  }
+
+  private message(error: unknown, fallback: string): string {
+    switch (this.problemCode(error)) {
+      case 'INVALID_CREDENTIALS': return 'DNI o contraseña incorrectos.';
+      case 'LOGIN_TEMPORARILY_LOCKED': return 'Demasiados intentos. Espera unos minutos e inténtalo nuevamente.';
+      case 'OTP_RATE_LIMITED': case 'RATE_LIMIT_EXCEEDED': return 'Demasiadas solicitudes. Espera unos minutos.';
+      case 'OTP_INVALID': return 'El código no es válido.';
+      case 'LOGIN_EXPIRED': return 'El código venció. Ingresa nuevamente tu contraseña.';
+      case 'LOGIN_NOT_CONFIGURED': case 'BANKING_DEPENDENCY_UNAVAILABLE': return 'El acceso no está disponible en este momento. Inténtalo más tarde.';
+      default: return error instanceof HttpErrorResponse && error.status >= 500 ? 'El acceso no está disponible en este momento. Inténtalo más tarde.' : fallback;
+    }
   }
 }

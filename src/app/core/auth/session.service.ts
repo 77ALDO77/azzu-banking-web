@@ -1,6 +1,6 @@
 import { Injectable, inject } from '@angular/core';
 import { Observable, catchError, finalize, map, of, shareReplay, tap } from 'rxjs';
-import { AUTH_PORT, AuthenticatedSession, LoginCredentials } from '../application/ports/auth.port';
+import { AUTH_PORT, AuthenticatedSession, LoginChallenge, LoginCredentials } from '../application/ports/auth.port';
 import { SessionStateService } from './session-state.service';
 
 @Injectable({ providedIn: 'root' })
@@ -10,16 +10,20 @@ export class SessionService {
   private sessionCheck?: Observable<boolean>;
   readonly session = this.state.session;
 
-  beginSignIn(returnUrl = '/portal/inicio'): void {
-    this.auth.beginLogin(this.safeReturnUrl(returnUrl));
-  }
-
   beginStepUp(returnUrl: string): void {
     this.auth.beginStepUp(this.safeReturnUrl(returnUrl));
   }
 
-  authenticate(credentials: LoginCredentials): Observable<AuthenticatedSession> {
-    return this.auth.login(credentials).pipe(tap((session) => this.state.set(session)));
+  startLogin(credentials: LoginCredentials): Observable<LoginChallenge> {
+    return this.auth.startLogin(credentials);
+  }
+
+  verifyLogin(loginId: string, code: string): Observable<AuthenticatedSession> {
+    return this.auth.verifyLogin(loginId, code).pipe(tap((session) => this.state.set(session)));
+  }
+
+  safeReturnUrl(returnUrl: string | null | undefined): string {
+    return returnUrl && returnUrl.startsWith('/') && !returnUrl.startsWith('//') ? returnUrl : '/portal/inicio';
   }
 
   ensureAuthenticated(): Observable<boolean> {
@@ -51,9 +55,5 @@ export class SessionService {
 
   invalidate(): void {
     this.state.clear();
-  }
-
-  private safeReturnUrl(returnUrl: string): string {
-    return returnUrl.startsWith('/') && !returnUrl.startsWith('//') ? returnUrl : '/portal/inicio';
   }
 }

@@ -1,16 +1,17 @@
 import { Injectable } from '@angular/core';
-import { Observable, of } from 'rxjs';
-import { AuthenticatedSession, AuthPort, LoginCredentials } from '../../application/ports/auth.port';
+import { Observable, of, throwError } from 'rxjs';
+import { AuthenticatedSession, AuthPort, LoginChallenge, LoginCredentials } from '../../application/ports/auth.port';
 
 @Injectable()
 export class MockAuthAdapter implements AuthPort {
   private session: AuthenticatedSession | null = null;
 
-  beginLogin(_returnUrl: string): void {}
+  startLogin(_credentials: LoginCredentials): Observable<LoginChallenge> {
+    return of({ loginId: 'mock-login', maskedEmail: 'ma*****@example.com', expiresInSeconds: 300 });
+  }
 
-  beginStepUp(_returnUrl: string): void {}
-
-  login(_credentials: LoginCredentials): Observable<AuthenticatedSession> {
+  verifyLogin(_loginId: string, code: string): Observable<AuthenticatedSession> {
+    if (!/^\d{6}$/.test(code)) return throwError(() => new Error('OTP_INVALID'));
     this.session = {
       customerId: 'demo-customer',
       displayName: 'Mariana',
@@ -19,6 +20,8 @@ export class MockAuthAdapter implements AuthPort {
     };
     return of(this.session);
   }
+
+  beginStepUp(_returnUrl: string): void {}
 
   getSession(): Observable<AuthenticatedSession | null> {
     return of(this.session);
